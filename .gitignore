@@ -1,0 +1,17 @@
+# Binaries / Binärdateien / Бінарники
+jobradar
+*.exe
+
+# Local environment / Lokale Umgebung / Локальне оточення
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Output data / Ausgabedaten / Вихідні дані
+*.json
+!testdata/*.json
