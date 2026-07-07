@@ -1,0 +1,57 @@
+// Package postgres handles all PostgreSQL access for jobradar.
+package postgres
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/mykola-petrychenko/jobradar/internal/core"
+)
+
+// Store gives access to jobradar data in PostgreSQL.
+type Store struct {
+	pool *pgxpool.Pool
+}
+
+// New builds a connection pool and verifies the database is reachable.
+func New(ctx context.Context, dsn string) (*Store, error) {
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		return nil, fmt.Errorf("create pool: %w", err)
+	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("ping database: %w", err)
+	}
+	return &Store{pool: pool}, nil
+}
+
+// Close releases all connections.
+func (s *Store) Close() {
+	s.pool.Close()
+}
+
+// Insert saves one posting. Duplicates (same Source+SourceID) are
+// silently skipped. It reports whether a new row was inserted.
+func (s *Store) Insert(ctx context.Context, p core.Posting) (bool, error) {
+	tag, err := s.pool.Exec(ctx,
+		`INSERT INTO postings (source, source_id, raw)
+		 VALUES ($1, $2, $3)
+		 ON CONFLICT (source, source_id) DO NOTHING`,
+		p.Source, p.SourceID, p.Raw)
+	if err != nil {
+		return false, fmt.Errorf("insert %s/%s: %w", p.Source, p.SourceID, err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// DeleteBySource removes all postings of one source. Used by tests.
+func (s *Store) DeleteBySource(ctx context.Context, source string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM postings WHERE source = $1`, source)
+	if err != nil {
+		return fmt.Errorf("delete by source %s: %w", source, err)
+	}
+	return nil
+}
