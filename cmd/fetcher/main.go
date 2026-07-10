@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/mykola-petrychenko/jobradar/internal/arbeitnow"
 	"github.com/mykola-petrychenko/jobradar/internal/postgres"
 )
 
@@ -42,5 +43,33 @@ func run(ctx context.Context) error {
 	defer store.Close()
 
 	fmt.Println("database connection OK")
+
+	since, err := store.LatestCreatedAt(ctx, "arbeitnow")
+	if err != nil {
+		return err
+	}
+	monthAgo := time.Now().AddDate(0, -1, 0).Unix()
+	if since < monthAgo {
+		since = monthAgo
+	}
+
+	client := arbeitnow.New()
+	postings, err := client.Fetch(ctx, since)
+	if err != nil {
+		return fmt.Errorf("fetch arbeitnow: %w", err)
+	}
+
+	inserted := 0
+	for _, p := range postings {
+		ok, err := store.Insert(ctx, p)
+		if err != nil {
+			return fmt.Errorf("store posting: %w", err)
+		}
+		if ok {
+			inserted++
+		}
+	}
+
+	fmt.Printf("arbeitnow: fetched %d postings, %d new\n", len(postings), inserted)
 	return nil
 }

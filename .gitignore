@@ -15,3 +15,5 @@ jobradar
 # Output data / Ausgabedaten / Вихідні дані
 *.json
 !testdata/*.json
+
+trash

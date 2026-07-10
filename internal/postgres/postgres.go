@@ -55,3 +55,16 @@ func (s *Store) DeleteBySource(ctx context.Context, source string) error {
 	}
 	return nil
 }
+
+// LatestCreatedAt returns the created_at of the newest stored posting
+// of one source, or 0 if none are stored yet.
+func (s *Store) LatestCreatedAt(ctx context.Context, source string) (int64, error) {
+	var ts int64
+	err := s.pool.QueryRow(ctx,
+		`SELECT COALESCE(MAX((raw->>'created_at')::bigint), 0)
+		 FROM postings WHERE source = $1`, source).Scan(&ts)
+	if err != nil {
+		return 0, fmt.Errorf("latest created_at for %s: %w", source, err)
+	}
+	return ts, nil
+}
