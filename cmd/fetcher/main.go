@@ -5,7 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -21,12 +21,15 @@ func main() {
 		syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx); err != nil {
-		log.Fatal(err)
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	if err := run(ctx, logger); err != nil {
+		logger.Error("run failed", "err", err)
+		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context) error {
+func run(ctx context.Context, logger *slog.Logger) error {
 	godotenv.Load()
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
@@ -42,20 +45,27 @@ func run(ctx context.Context) error {
 	}
 	defer store.Close()
 
-	fmt.Println("database connection OK")
+	logger.Info("database connected")
 
 	since, err := store.LatestCreatedAt(ctx, "arbeitnow")
 	if err != nil {
-		return err
+		return fmt.Errorf("latest created_at: %w", err)
 	}
-	monthAgo := time.Now().AddDate(0, -1, 0).Unix()
+	monthAgo := time.Now().AddDate(0, 0, -3).Unix()
 	if since < monthAgo {
 		since = monthAgo
 	}
 
 	client := arbeitnow.New()
+
+	logger.Info("fetch started", "source", "arbeitnow")
+	start := time.Now()
+
 	postings, err := client.Fetch(ctx, since)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
 		return fmt.Errorf("fetch arbeitnow: %w", err)
 	}
 
@@ -63,6 +73,10 @@ func run(ctx context.Context) error {
 	for _, p := range postings {
 		ok, err := store.Insert(ctx, p)
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				logger.Info("run interrupted", "inserted_so_far", inserted)
+				return err
+			}
 			return fmt.Errorf("store posting: %w", err)
 		}
 		if ok {
@@ -70,6 +84,11 @@ func run(ctx context.Context) error {
 		}
 	}
 
-	fmt.Printf("arbeitnow: fetched %d postings, %d new\n", len(postings), inserted)
+	logger.Info("fetch finished",
+		"source", "arbeitnow",
+		"fetched", len(postings),
+		"inserted", inserted,
+		"duration", time.Since(start).Round(time.Second),
+	)
 	return nil
 }
