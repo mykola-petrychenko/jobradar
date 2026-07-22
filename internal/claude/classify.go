@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/mykola-petrychenko/jobradar/internal/util"
 	"github.com/mykola-petrychenko/jobradar/privat"
 )
 
@@ -54,14 +55,14 @@ func (c *Client) Classify(ctx context.Context, postingText string) (ClassifyResu
 		},
 	}
 
-	dumpRequest("classify", params)
+	util.DumpRequest("classify", params)
 
 	msg, err := c.api.Messages.New(ctx, params)
 	if err != nil {
 		return ClassifyResult{}, fmt.Errorf("classify: %w", err)
 	}
 
-	dumpRawResponse("classify", msg.RawJSON())
+	util.DumpRawResponse("classify", msg.RawJSON())
 
 	if string(msg.StopReason) != "end_turn" {
 		return ClassifyResult{}, fmt.Errorf("classify: unexpected stop_reason %q", msg.StopReason)

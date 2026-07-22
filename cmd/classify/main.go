@@ -12,6 +12,7 @@ import (
 
 	"github.com/mykola-petrychenko/jobradar/internal/claude"
 	"github.com/mykola-petrychenko/jobradar/internal/postgres"
+	"github.com/mykola-petrychenko/jobradar/internal/util"
 )
 
 func main() {
@@ -53,7 +54,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	for _, p := range postings {
 		logger.Info("sending", "posting_id", p.ID)
 
-		res, err := client.Classify(ctx, claude.CleanHTML(p.Description))
+		res, err := client.Classify(ctx, util.CleanHTML(p.Description))
 		if err != nil {
 			logger.Error("classify failed", "posting_id", p.ID, "err", err)
 			continue
