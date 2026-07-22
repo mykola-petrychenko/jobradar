@@ -1,3 +1,4 @@
+// Package postgres handles all PostgreSQL access for jobradar.
 package postgres
 
 import (
