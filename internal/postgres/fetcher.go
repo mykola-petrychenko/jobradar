@@ -23,8 +23,8 @@ func (s *Store) Insert(ctx context.Context, p core.Posting) (bool, error) {
 	return tag.RowsAffected() == 1, nil
 }
 
-// LatestCreatedAt returns the created_at of the newest stored posting
-// of one source, or 0 if none are stored yet.
+// Queries used by cmd/fetcher: inserting new postings and tracking the
+// per-source cursor used to avoid re-fetching old data.
 func (s *Store) LatestCreatedAt(ctx context.Context, source string) (int64, error) {
 	var ts int64
 	err := s.pool.QueryRow(ctx,

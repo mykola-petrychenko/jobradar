@@ -1,4 +1,3 @@
-// Command fetcher collects job postings and stores them in PostgreSQL.
 package main
 
 import (
@@ -13,29 +12,34 @@ import (
 
 	"github.com/joho/godotenv"
 	"github.com/mykola-petrychenko/jobradar/internal/arbeitnow"
+	"github.com/mykola-petrychenko/jobradar/internal/core"
 	"github.com/mykola-petrychenko/jobradar/internal/postgres"
 )
 
 func main() {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	if err := godotenv.Load(); err != nil {
+		logger.Warn("no .env file, using environment", "err", err)
+	}
+
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		logger.Error("DATABASE_URL is not set")
+		os.Exit(1)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(),
 		syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-
-	if err := run(ctx, logger); err != nil {
+	if err := run(ctx, logger, dsn); err != nil {
 		logger.Error("run failed", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, logger *slog.Logger) error {
-	godotenv.Load()
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		return errors.New("DATABASE_URL is not set")
-	}
-
+func run(ctx context.Context, logger *slog.Logger, dsn string) error {
 	connectCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
@@ -45,50 +49,73 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	}
 	defer store.Close()
 
-	logger.Info("database connected")
-
-	since, err := store.LatestCreatedAt(ctx, "arbeitnow")
-	if err != nil {
-		return fmt.Errorf("latest created_at: %w", err)
-	}
-	monthAgo := time.Now().AddDate(0, 0, -3).Unix()
-	if since < monthAgo {
-		since = monthAgo
-	}
-
-	client := arbeitnow.New()
-
-	logger.Info("fetch started", "source", "arbeitnow")
+	client := arbeitnow.New(logger)
+	logger.Info("fetch started")
 	start := time.Now()
 
-	postings, err := client.Fetch(ctx, since)
+	const stopAfterEmptyPages = 4
+
+	var totalInserted, totalAlreadyInDB, totalFailed, emptyStreak int
+
+	err = client.Fetch(ctx, func(ctx context.Context, postings []core.Posting) error {
+		saveStart := time.Now()
+		var newInDB, alreadyInDB, failed int
+
+		for _, p := range postings {
+			ok, err := store.Insert(ctx, p)
+			if err != nil {
+				logger.Warn("insert failed", "source_id", p.SourceID, "err", err)
+				failed++
+				continue
+			}
+			if ok {
+				newInDB++
+			} else {
+				alreadyInDB++
+			}
+		}
+
+		totalInserted += newInDB
+		totalAlreadyInDB += alreadyInDB
+		totalFailed += failed
+
+		if newInDB == 0 && len(postings) > 0 {
+			emptyStreak++
+		} else {
+			emptyStreak = 0
+		}
+
+		logger.Info("db save",
+			"new_in_db", newInDB,
+			"already_in_db", alreadyInDB,
+			"failed", failed,
+			"total_new_in_db", totalInserted,
+			"empty_streak", emptyStreak,
+			"duration", time.Since(saveStart).Round(time.Millisecond),
+		)
+
+		if emptyStreak >= stopAfterEmptyPages {
+			logger.Info("no new postings for consecutive pages, stopping early",
+				"empty_streak", emptyStreak)
+			return arbeitnow.ErrDone
+		}
+
+		return ctx.Err()
+	})
+
+	logger.Info("fetch finished",
+		"new_in_db", totalInserted,
+		"already_in_db", totalAlreadyInDB,
+		"failed", totalFailed,
+		"duration", time.Since(start).Round(time.Second),
+	)
+
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return err
+			logger.Info("fetch canceled")
+			return nil
 		}
 		return fmt.Errorf("fetch arbeitnow: %w", err)
 	}
-
-	inserted := 0
-	for _, p := range postings {
-		ok, err := store.Insert(ctx, p)
-		if err != nil {
-			if errors.Is(err, context.Canceled) {
-				logger.Info("run interrupted", "inserted_so_far", inserted)
-				return err
-			}
-			return fmt.Errorf("store posting: %w", err)
-		}
-		if ok {
-			inserted++
-		}
-	}
-
-	logger.Info("fetch finished",
-		"source", "arbeitnow",
-		"fetched", len(postings),
-		"inserted", inserted,
-		"duration", time.Since(start).Round(time.Second),
-	)
 	return nil
 }

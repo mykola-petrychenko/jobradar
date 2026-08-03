@@ -24,4 +24,5 @@ require (
 	go.yaml.in/yaml/v4 v4.0.0-rc.6 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/text v0.29.0 // indirect
+	golang.org/x/time v0.15.0
 )
