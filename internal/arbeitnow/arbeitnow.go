@@ -1,38 +1,37 @@
-// Package arbeitnow fetches job postings from the Arbeitnow public API.
+// Package arbeitnow implements a fetch.Source for the public
+// Arbeitnow job board API.
 package arbeitnow
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
-	"strconv"
 	"time"
 
-	"github.com/mykola-petrychenko/jobradar/internal/core"
-	"golang.org/x/time/rate"
+	"github.com/mykola-petrychenko/jobradar/internal/httpclient"
+	"github.com/mykola-petrychenko/jobradar/internal/job"
 )
 
-const endpoint = "https://www.arbeitnow.com/api/job-board-api"
-const Source = "arbeitnow"
-const requestInterval = 3 * time.Second
+const (
+	endpoint   = "https://www.arbeitnow.com/api/job-board-api"
+	sourceName = "arbeitnow"
+)
 
-type Client struct {
-	http    *http.Client
-	logger  *slog.Logger
-	limiter *rate.Limiter
+// Source knows how to talk to the Arbeitnow API: the endpoint,
+// the response format, and where the next-page link lives.
+type Source struct {
+	http   *httpclient.Client
+	logger *slog.Logger
 }
 
-func New(logger *slog.Logger) *Client {
-	return &Client{
-		http:    &http.Client{Timeout: 15 * time.Second},
-		logger:  logger,
-		limiter: rate.NewLimiter(rate.Every(requestInterval), 1),
-	}
+// New builds a Source that performs requests through the given client.
+func New(logger *slog.Logger, http *httpclient.Client) *Source {
+	return &Source{http: http, logger: logger}
 }
+
+// Name identifies this source in logs and stored postings.
+func (s *Source) Name() string { return sourceName }
 
 type page struct {
 	Data  []json.RawMessage `json:"data"`
@@ -41,153 +40,71 @@ type page struct {
 	} `json:"links"`
 }
 
-type PageFunc func(ctx context.Context, postings []core.Posting) error
-
-var ErrDone = errors.New("stop fetching")
-
-func (c *Client) Fetch(ctx context.Context, onPage PageFunc) error {
-	seen := make(map[string]bool)
-	url := endpoint
-
-	for pageNum := 1; url != ""; pageNum++ {
-		pageStart := time.Now()
-
-		if err := c.limiter.Wait(ctx); err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return err
-			}
-			return fmt.Errorf("rate limit wait: %w", err)
-		}
-
-		p, err := c.fetchPageRetrying(ctx, url, pageNum)
-		if err != nil {
-			return fmt.Errorf("page %d: %w", pageNum, err)
-		}
-
-		var batch []core.Posting
-		var dup int
-
-		for _, raw := range p.Data {
-			var meta struct {
-				Slug string `json:"slug"`
-			}
-			if err := json.Unmarshal(raw, &meta); err != nil || meta.Slug == "" {
-				c.logger.Warn("json.Unmarshal error", "err", err, "slug", meta.Slug)
-				continue
-			}
-			if seen[meta.Slug] {
-				dup++
-				continue
-			}
-			seen[meta.Slug] = true
-
-			batch = append(batch, core.Posting{
-				Source:   Source,
-				SourceID: meta.Slug,
-				Raw:      raw,
-			})
-		}
-
-		c.logger.Info("fetched",
-			"page", pageNum,
-			"received", len(p.Data),
-			"new", len(batch),
-			"duplicates", dup,
-			"has_next", p.Links.Next != "",
-			"duration", time.Since(pageStart).Round(time.Millisecond),
-		)
-
-		if err := onPage(ctx, batch); err != nil {
-			if errors.Is(err, ErrDone) {
-				c.logger.Info("stopping: caller signaled done", "page", pageNum)
-				return nil
-			}
-			return fmt.Errorf("page %d: %w", pageNum, err)
-		}
-
-		url = p.Links.Next
+// FetchPage downloads and parses one page of the Arbeitnow API.
+// It is stateless: everything it needs arrives in the arguments.
+func (s *Source) FetchPage(ctx context.Context, pageNum int, url string) ([]job.Posting, string, error) {
+	if url == "" {
+		url = endpoint
 	}
-	return nil
-}
 
-func (c *Client) fetchPage(ctx context.Context, url string, pageNum int) (*page, error) {
-	var facts connFacts
-	ctx = withConnTrace(ctx, &facts)
+	start := time.Now()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	body, err := s.http.Get(ctx, url, fmt.Sprintf("page-%03d", pageNum))
 	if err != nil {
-		return nil, err
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response body: %w", err)
-	}
-
-	dumpExchange(pageNum, req, resp, facts, bodyBytes)
-
-	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
-		return nil, &retryableError{
-			status:     resp.StatusCode,
-			retryAfter: resp.Header.Get("Retry-After"),
-		}
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status %s", resp.Status)
+		return nil, "", err
 	}
 
 	var p page
-	if err := json.Unmarshal(bodyBytes, &p); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
+	if err := json.Unmarshal(body, &p); err != nil {
+		head := body
+		if len(head) > 50 {
+			head = head[:50]
+		}
+		return nil, "", fmt.Errorf("decode page body (%d bytes, starts with %q): %w",
+			len(body), head, err)
 	}
-	return &p, nil
+
+	postings, skipped := parsePage(&p)
+
+	s.logger.Debug("page fetched",
+		"page", pageNum,
+		"got", len(p.Data),
+		"usable", len(postings),
+		"malformed", skipped.malformed,
+		"no_id", skipped.noID,
+		"has_next", p.Links.Next != "",
+		"fetch_ms", time.Since(start).Milliseconds(),
+	)
+
+	return postings, p.Links.Next, nil
 }
 
-func (c *Client) fetchPageRetrying(ctx context.Context, url string, pageNum int) (*page, error) {
-	const maxAttempts = 5
+type skipCounts struct {
+	malformed int
+	noID      int
+}
 
-	for attempt := 0; ; attempt++ {
-		p, err := c.fetchPage(ctx, url, pageNum)
+func parsePage(p *page) ([]job.Posting, skipCounts) {
+	postings := make([]job.Posting, 0, len(p.Data))
+	var skipped skipCounts
 
-		var retryable *retryableError
-		if err == nil {
-			return p, nil
+	for _, raw := range p.Data {
+		var meta struct {
+			Slug string `json:"slug"`
 		}
-		if !errors.As(err, &retryable) || attempt == maxAttempts-1 {
-			return nil, err
+		if err := json.Unmarshal(raw, &meta); err != nil {
+			skipped.malformed++
+			continue
 		}
-
-		wait := retryable.wait(attempt)
-		c.logger.Warn("transient error, pausing before retry",
-			"page", pageNum, "attempt", attempt+1, "wait", wait, "err", err)
-
-		select {
-		case <-time.After(wait):
-		case <-ctx.Done():
-			return nil, ctx.Err()
+		if meta.Slug == "" {
+			skipped.noID++
+			continue
 		}
+		postings = append(postings, job.Posting{
+			Source:   sourceName,
+			SourceID: meta.Slug,
+			Raw:      raw,
+		})
 	}
-}
-
-type retryableError struct {
-	status     int
-	retryAfter string
-}
-
-func (e *retryableError) Error() string {
-	return fmt.Sprintf("transient error, status %d", e.status)
-}
-
-func (e *retryableError) wait(attempt int) time.Duration {
-	if e.retryAfter != "" {
-		if secs, err := strconv.Atoi(e.retryAfter); err == nil {
-			return time.Duration(secs) * time.Second
-		}
-	}
-	return time.Duration(1<<attempt) * time.Second // 1s, 2s, 4s, 8s...
+	return postings, skipped
 }

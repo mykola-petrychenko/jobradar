@@ -1,19 +1,32 @@
 # jobradar
 
-A Go service that collects IT job postings from public APIs,
-stores them in PostgreSQL, and analyzes the German job market.
+Fetches job postings from the Arbeitnow public API and stores them
+in PostgreSQL.
 
-## Status
+## Requirements
 
-🚧 In active development.
+- Go 1.26+
+- PostgreSQL 18+
 
-## Stack
+## Setup
 
-- Go
-- PostgreSQL (JSONB)
-- Docker
-- GitHub Actions (planned)
+```bash
+cp .env.example .env
+# fill in DATABASE_URL in .env
+docker exec -i <postgres-container> psql -U postgres -d jobradar < migrations/0001_postings.sql
+```
 
-## Architecture
+## Run
 
-Fetchers (one per API source) → PostgreSQL (raw JSONB) → classifier → analytics.
+```bash
+go run ./cmd/fetcher
+```
+
+## Development
+
+```bash
+gofmt -l .
+go vet ./...
+golangci-lint run
+go build ./...
+```

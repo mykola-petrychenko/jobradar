@@ -1,21 +1,17 @@
-# Binaries / Binärdateien / Бінарники
-jobradar
-*.exe
+# binaries
+/fetcher
+/cmd/fetcher/fetcher
 
-# Local environment / Lokale Umgebung / Локальне оточення
+# secrets
 .env
 
-# IDE
-.vscode/
-.idea/
+# debug dumps
+/debug/
+/dumps/
+
+# scratch
+/trash/
+/privat/
 
 # OS
 .DS_Store
-
-# Output data / Ausgabedaten / Вихідні дані
-*.json
-!testdata/*.json
-
-trash
-privat
-**/debug/

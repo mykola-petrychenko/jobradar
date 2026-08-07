@@ -3,17 +3,23 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// Store provides access to the jobradar database.
 type Store struct {
 	pool *pgxpool.Pool
 }
 
 // New builds a connection pool and verifies the database is reachable.
 func New(ctx context.Context, dsn string) (*Store, error) {
+	if dsn == "" {
+		return nil, errors.New("DATABASE_URL is required")
+	}
+
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("create pool: %w", err)
