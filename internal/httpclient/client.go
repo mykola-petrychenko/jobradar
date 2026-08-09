@@ -27,6 +27,7 @@ type Client struct {
 	logger      *slog.Logger
 	limiter     *rate.Limiter
 	dumper      Dumper
+	headers     map[string]string
 	maxAttempts int
 	userAgent   string
 }
@@ -53,6 +54,10 @@ type Options struct {
 	// UserAgent identifies this client to servers.
 	// Empty means defaultUserAgent.
 	UserAgent string
+
+	// Headers are set on every request, after the defaults.
+	// Nil or empty means no extra headers.
+	Headers map[string]string
 }
 
 // New builds a Client, applying defaults for any unset option.
@@ -87,6 +92,7 @@ func New(logger *slog.Logger, opts Options) *Client {
 		logger:      logger,
 		limiter:     rate.NewLimiter(rate.Every(interval), 1),
 		dumper:      dumper,
+		headers:     opts.Headers,
 		maxAttempts: attempts,
 		userAgent:   userAgent,
 	}
@@ -141,6 +147,10 @@ func (c *Client) get(ctx context.Context, url, label string) ([]byte, error) {
 
 	req.Header.Set("User-Agent", c.userAgent)
 	req.Header.Set("Accept", "application/json")
+
+	for k, v := range c.headers {
+		req.Header.Set(k, v)
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {

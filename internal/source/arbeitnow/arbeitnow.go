@@ -49,7 +49,7 @@ func (s *Source) FetchPage(ctx context.Context, pageNum int, url string) ([]job.
 
 	start := time.Now()
 
-	body, err := s.http.Get(ctx, url, fmt.Sprintf("page-%03d", pageNum))
+	body, err := s.http.Get(ctx, url, fmt.Sprintf("%s-page-%03d", sourceName, pageNum))
 	if err != nil {
 		return nil, "", err
 	}
