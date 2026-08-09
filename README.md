@@ -9,7 +9,7 @@ so that learning and practice can be aimed at real demand.
 
 ## Planned
 
-- More sources (Bundesagentur für Arbeit, ...)
+- More sources
 - Static analysis first: keyword and pattern matching to drop non-IT postings
   and extract what can be read directly from the text
 - Claude integration as a core stage: filters are defined in plain language,
